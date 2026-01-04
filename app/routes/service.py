@@ -359,6 +359,38 @@ class ServiceBySlugResource(Resource):
             return {"message": "Error fetching service"}, 500
 
 
+class ServicesByCategoryResource(Resource):
+    """Resource for retrieving all services grouped by category."""
+    
+    def get(self):
+        """Get all active services grouped by category (PUBLIC)"""
+        try:
+            # Get all active services ordered by display_order
+            services = Service.query.filter_by(is_active=True).order_by(
+                Service.display_order.asc(),
+                Service.created_at.desc()
+            ).all()
+            
+            # Group services by category
+            services_by_category = {}
+            for category in ServiceCategory:
+                category_services = [
+                    service.as_dict() 
+                    for service in services 
+                    if service.category == category
+                ]
+                services_by_category[category.value] = category_services
+            
+            return {
+                'services_by_category': services_by_category,
+                'total': len(services)
+            }, 200
+            
+        except Exception as e:
+            logger.error(f"Error fetching services by category: {str(e)}")
+            return {"message": "Error fetching services"}, 500
+
+
 class ServiceCategoryResource(Resource):
     """Resource for handling service categories."""
     
@@ -432,13 +464,14 @@ class AdminServicesResource(Resource):
             
         except Exception as e:
             logger.error(f"Error fetching admin services: {str(e)}")
-            return {"message": "Error fetching services"}, 500
+            return {"message": "Erro fetching services"}, 500
 
 
 def register_service_resources(api):
     """Registers the ServiceResource routes with Flask-RESTful API."""
     api.add_resource(ServiceResource, "/services", "/services/<int:service_id>")
     api.add_resource(ServiceBySlugResource, "/services/slug/<string:slug>")
+    api.add_resource(ServicesByCategoryResource, "/services/by-category")
     api.add_resource(ServiceCategoryResource, "/service-categories")
     api.add_resource(FeaturedServicesResource, "/services/featured")
     api.add_resource(AdminServicesResource, "/admin/services")

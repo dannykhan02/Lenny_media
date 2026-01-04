@@ -25,7 +25,7 @@ class Cohort(db.Model):
     course_fee = db.Column(DECIMAL(10, 2), nullable=False, default=15000.00)
     registration_fee = db.Column(DECIMAL(10, 2), default=2000.00, nullable=False)
     
-    # Details
+    # Details``
     schedule_details = db.Column(db.Text, nullable=True)  # "Mon-Fri, 2pm-5pm"
     instructor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
