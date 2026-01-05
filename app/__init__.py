@@ -29,7 +29,7 @@ def create_app():
         print(f"🚀 Lenny Media API - {config_name.upper()}")
 
     # ============================================
-    # INITIALIZE DATABASE (No connection test)
+    # INITIALIZE DATABASE
     # ============================================
     db.init_app(app)
 
@@ -41,7 +41,7 @@ def create_app():
     migrate = Migrate(app, db)
 
     # ============================================
-    # CLOUDINARY - Simple Config (No ping test)
+    # CLOUDINARY
     # ============================================
     cloudinary.config(
         cloud_name=app.config.get('CLOUDINARY_CLOUD_NAME'),
@@ -51,7 +51,7 @@ def create_app():
     )
 
     # ============================================
-    # CORS - Simplified
+    # CORS - FIXED FOR PREFLIGHT
     # ============================================
     CORS(
         app,
@@ -59,8 +59,23 @@ def create_app():
         supports_credentials=True,
         expose_headers=["Set-Cookie", "Content-Type", "Authorization"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"]
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        max_age=3600
     )
+
+    # Handle preflight manually
+    @app.before_request
+    def handle_preflight():
+        if request.method == "OPTIONS":
+            response = app.make_response("")
+            origin = request.headers.get('Origin')
+            if origin in app.config.get('CORS_ORIGINS', []):
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept'
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+                response.headers['Access-Control-Max-Age'] = '3600'
+            return response
 
     # ============================================
     # EMAIL SERVICE
@@ -147,7 +162,7 @@ def create_app():
         }
 
     # ============================================
-    # CORS HEADERS
+    # CORS HEADERS ON RESPONSES
     # ============================================
     @app.after_request
     def after_request(response):
