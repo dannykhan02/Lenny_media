@@ -367,9 +367,19 @@ class AdminBookingsResource(Resource):
             status = request.args.get('status', type=str)
             service_type = request.args.get('service_type', type=str)
             search = request.args.get('search', type=str)
-            assigned_to = request.args.get('assigned_to', type=int)
+            assigned_to_param = request.args.get('assigned_to', type=str)  # Changed to string to handle 'null'
             date_from = request.args.get('date_from', type=str)
             date_to = request.args.get('date_to', type=str)
+            
+            # Validate pagination parameters
+            if page < 1:
+                page = 1
+            
+            # Validate per_page to prevent excessive data fetching
+            if per_page > 100:
+                per_page = 100
+            if per_page < 1:
+                per_page = 20
             
             # Build query with filters
             query = Booking.query
@@ -388,26 +398,42 @@ class AdminBookingsResource(Resource):
             if service_type:
                 query = query.filter_by(service_type=service_type)
             
-            # Filter by assigned user
-            if assigned_to:
-                query = query.filter_by(assigned_to=assigned_to)
+            # UPDATED: Filter by assigned user (handle 'null' for unassigned)
+            if assigned_to_param:
+                if assigned_to_param.lower() == 'null':
+                    # Filter for unassigned bookings (assigned_to IS NULL)
+                    query = query.filter(Booking.assigned_to.is_(None))
+                    logger.info("Filtering for unassigned bookings")
+                else:
+                    # Filter for specific assigned user
+                    try:
+                        assigned_user_id = int(assigned_to_param)
+                        query = query.filter_by(assigned_to=assigned_user_id)
+                        logger.info(f"Filtering for bookings assigned to user {assigned_user_id}")
+                    except ValueError:
+                        return {
+                            "message": "Invalid assigned_to value. Must be a number or 'null'"
+                        }, 400
             
-            # Search by client name, email, or phone
+            # UPDATED: Search by client name, email, phone, OR service type
             if search:
                 search_term = f"%{search}%"
                 query = query.filter(
                     or_(
                         Booking.client_name.ilike(search_term),
                         Booking.client_email.ilike(search_term),
-                        Booking.client_phone.ilike(search_term)
+                        Booking.client_phone.ilike(search_term),
+                        Booking.service_type.ilike(search_term)  # Added service type to search
                     )
                 )
+                logger.info(f"Searching bookings with term: {search}")
             
             # Filter by date range
             if date_from:
                 try:
                     date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
                     query = query.filter(Booking.preferred_date >= date_from_obj)
+                    logger.info(f"Filtering bookings from date: {date_from}")
                 except ValueError:
                     return {"message": "Invalid date_from format. Use YYYY-MM-DD"}, 400
             
@@ -415,24 +441,31 @@ class AdminBookingsResource(Resource):
                 try:
                     date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
                     query = query.filter(Booking.preferred_date <= date_to_obj)
+                    logger.info(f"Filtering bookings to date: {date_to}")
                 except ValueError:
                     return {"message": "Invalid date_to format. Use YYYY-MM-DD"}, 400
             
             # Order by created_at descending (newest first)
             query = query.order_by(Booking.created_at.desc())
             
+            # Get total count before pagination for accurate stats
+            total_count = query.count()
+            
             # Get bookings with pagination
             bookings = query.paginate(page=page, per_page=per_page, error_out=False)
             
+            logger.info(f"Fetched {len(bookings.items)} bookings (page {page} of {bookings.pages}, total: {total_count})")
+            
             return {
                 'bookings': [booking.as_dict() for booking in bookings.items],
-                'total': bookings.total,
+                'total': total_count,
                 'pages': bookings.pages,
-                'current_page': bookings.page
+                'current_page': bookings.page,
+                'per_page': per_page
             }, 200
             
         except Exception as e:
-            logger.error(f"Error fetching admin bookings: {str(e)}")
+            logger.error(f"Error fetching admin bookings: {str(e)}", exc_info=True)
             return {"message": "Error fetching bookings"}, 500
 
 
@@ -620,15 +653,34 @@ class BookingBulkActionResource(Resource):
                 if 'assigned_to' not in data:
                     return {"message": "assigned_to is required for assign action"}, 400
                 
-                if data['assigned_to']:
-                    assigned_user = User.query.get(data['assigned_to'])
-                    if not assigned_user:
-                        return {"message": "Assigned user not found"}, 404
+                # UPDATED: Handle both assignment and unassignment
+                assigned_to_value = data['assigned_to']
                 
-                for booking in bookings:
-                    booking.assigned_to = data['assigned_to']
-                    booking.updated_at = datetime.now(timezone.utc)
-                    updated_count += 1
+                if assigned_to_value is not None and assigned_to_value != '':
+                    # Assigning to a user
+                    try:
+                        assigned_user_id = int(assigned_to_value)
+                        assigned_user = User.query.get(assigned_user_id)
+                        if not assigned_user:
+                            return {"message": "Assigned user not found"}, 404
+                        
+                        for booking in bookings:
+                            booking.assigned_to = assigned_user_id
+                            booking.updated_at = datetime.now(timezone.utc)
+                            updated_count += 1
+                            
+                        logger.info(f"Bulk assigned {updated_count} bookings to user {assigned_user.name}")
+                        
+                    except (ValueError, TypeError):
+                        return {"message": "Invalid assigned_to value"}, 400
+                else:
+                    # Unassigning (set to None)
+                    for booking in bookings:
+                        booking.assigned_to = None
+                        booking.updated_at = datetime.now(timezone.utc)
+                        updated_count += 1
+                    
+                    logger.info(f"Bulk unassigned {updated_count} bookings")
             
             elif action == 'delete':
                 for booking in bookings:

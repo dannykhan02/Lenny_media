@@ -445,22 +445,22 @@ class DashboardStatsResource(Resource):
 
 
 # =====================================================
-# NEW: Notification Count Resource (for navbar badge)
+# UPDATED: Notification Count Resource (for navbar badge)
 # =====================================================
 class NotificationCountResource(Resource):
     """
     Get unread notification count for navbar badge
-    Counts actionable items from both bookings and quotes:
-    - Pending bookings
-    - Pending quotes
-    - Quotes with conflicts
-    - Old pending quotes (>24hrs)
-    - Quotes needing follow-up (>7 days)
+    Counts ONLY actionable items that require immediate attention:
+    - Pending bookings (need to be confirmed/processed)
+    - Pending quotes (need to be reviewed and quoted)
+    
+    NOTE: Conflicts are NOT counted here as they're informational,
+    not blocking actions. Users can navigate to quotes page to see them.
     """
     
     @jwt_required()
     def get(self):
-        """Get count of actionable items (alerts) - bookings + quotes"""
+        """Get count of actionable items requiring immediate attention"""
         try:
             current_user_id = get_jwt_identity()
             user = User.query.get(current_user_id)
@@ -468,13 +468,13 @@ class NotificationCountResource(Resource):
             if not user or user.role != UserRole.ADMIN:
                 return {"message": "Only admins can access notifications"}, 403
 
-            # Count alerts from BOTH bookings and quotes
+            # Count ONLY items requiring immediate action
             alert_count = 0
             
             # ====================
             # BOOKING ALERTS
             # ====================
-            # Pending bookings need attention
+            # Pending bookings need confirmation
             pending_bookings = Booking.query.filter_by(
                 status=BookingStatus.PENDING
             ).count()
@@ -483,27 +483,19 @@ class NotificationCountResource(Resource):
             # ====================
             # QUOTE ALERTS
             # ====================
-            # Count all PENDING quotes (need to be processed)
+            # Count ONLY PENDING quotes (need to be processed and quoted)
             pending_quotes = QuoteRequest.query.filter_by(
                 status=QuoteStatus.PENDING
             ).count()
             alert_count += pending_quotes
             
-            # Count SENT quotes with conflicts (not already counted in pending)
-            conflicted_sent_quotes = QuoteRequest.query.filter_by(
-                has_conflict=True,
-                status=QuoteStatus.SENT
-            ).count()
-            alert_count += conflicted_sent_quotes
-            
-            # Total conflicted quotes (for breakdown - both pending and sent)
+            # Additional metrics for breakdown (informational only, not in main count)
             total_conflicted_quotes = QuoteRequest.query.filter_by(
                 has_conflict=True
             ).filter(
                 QuoteRequest.status.in_([QuoteStatus.PENDING, QuoteStatus.SENT])
             ).count()
             
-            # Old pending quotes (for breakdown - informational only)
             yesterday = datetime.now(timezone.utc) - timedelta(hours=24)
             old_pending = QuoteRequest.query.filter_by(
                 status=QuoteStatus.PENDING
@@ -511,7 +503,6 @@ class NotificationCountResource(Resource):
                 QuoteRequest.created_at < yesterday
             ).count()
             
-            # Quotes needing follow-up (for breakdown - informational only)
             week_ago = datetime.now(timezone.utc) - timedelta(days=7)
             needs_followup = QuoteRequest.query.filter_by(
                 status=QuoteStatus.SENT
@@ -524,7 +515,6 @@ class NotificationCountResource(Resource):
                 "breakdown": {
                     "pending_bookings": pending_bookings,
                     "pending_quotes": pending_quotes,
-                    "conflicted_sent_quotes": conflicted_sent_quotes,
                     "total_conflicts": total_conflicted_quotes,
                     "old_pending": old_pending,
                     "needs_followup": needs_followup
@@ -540,17 +530,17 @@ class NotificationCountResource(Resource):
 
 
 # =====================================================
-# NEW: Quote Summary Resource (for navbar badges)
+# UPDATED: Quote Summary Resource (for navbar badges)
 # =====================================================
 class QuoteSummaryResource(Resource):
     """
     Get quick quote statistics for navbar badges
-    Returns counts needed for badge display
+    Returns counts needed for badge display on Quotes menu items
     """
     
     @jwt_required()
     def get(self):
-        """Get quick quote statistics"""
+        """Get quick quote statistics for menu badges"""
         try:
             current_user_id = get_jwt_identity()
             user = User.query.get(current_user_id)
@@ -578,8 +568,8 @@ class QuoteSummaryResource(Resource):
                 QuoteRequest.status.in_([QuoteStatus.PENDING, QuoteStatus.SENT])
             ).count()
             
-            # Action required (pending + conflicts)
-            action_required = pending_count + conflict_count
+            # Action required (ONLY pending quotes - these need immediate attention)
+            action_required = pending_count
 
             return {
                 "pending_count": pending_count,
