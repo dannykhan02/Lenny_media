@@ -1,7 +1,9 @@
 """
-Dashboard Statistics Resource
-Provides comprehensive statistics for admin dashboard visualizations
-Plus notification and quote summary endpoints for navbar
+Dashboard Statistics Resource - FIXED VERSION
+Key fixes:
+1. Proper conditional filtering using SQLAlchemy patterns
+2. Removed invalid True/False in filter() calls
+3. Added proper error handling
 """
 
 import logging
@@ -93,21 +95,19 @@ class DashboardStatsResource(Resource):
 
         except SQLAlchemyError as e:
             logger.error(f"Database error fetching dashboard stats: {str(e)}")
-            return {"message": "Database error occurred"}, 500
+            return {"message": f"Database error: {str(e)}"}, 500
         except Exception as e:
             logger.error(f"Error fetching dashboard stats: {str(e)}")
-            return {"message": "Error fetching dashboard statistics"}, 500
+            return {"message": f"Error: {str(e)}"}, 500
 
     def _get_overview_stats(self, date_from, date_to):
         """Get high-level overview statistics"""
-        base_query_date = date_from is not None
-        
         # Total counts
         total_bookings = Booking.query.count()
         total_quotes = QuoteRequest.query.count()
         
-        # Period-specific counts
-        if base_query_date:
+        # Period-specific counts with proper filtering
+        if date_from:
             period_bookings = Booking.query.filter(
                 Booking.created_at >= date_from,
                 Booking.created_at <= date_to
@@ -142,12 +142,14 @@ class DashboardStatsResource(Resource):
         }
 
     def _get_booking_stats(self, date_from, date_to):
-        """Get detailed booking statistics"""
+        """Get detailed booking statistics - FIXED"""
+        # Build query with proper conditional filtering
         query = Booking.query
-        
         if date_from:
-            query = query.filter(Booking.created_at >= date_from)
-            query = query.filter(Booking.created_at <= date_to)
+            query = query.filter(
+                Booking.created_at >= date_from,
+                Booking.created_at <= date_to
+            )
 
         # Status breakdown
         status_counts = {}
@@ -155,14 +157,19 @@ class DashboardStatsResource(Resource):
             count = query.filter_by(status=status).count()
             status_counts[status.value] = count
 
-        # Service type breakdown
-        service_breakdown = db.session.query(
+        # Service type breakdown - FIXED: Proper conditional filtering
+        service_query = db.session.query(
             Booking.service_type,
             func.count(Booking.id).label('count')
-        ).filter(
-            Booking.created_at >= date_from if date_from else True,
-            Booking.created_at <= date_to if date_from else True
-        ).group_by(Booking.service_type).all()
+        )
+        
+        if date_from:
+            service_query = service_query.filter(
+                Booking.created_at >= date_from,
+                Booking.created_at <= date_to
+            )
+        
+        service_breakdown = service_query.group_by(Booking.service_type).all()
 
         # Upcoming bookings
         upcoming = Booking.query.filter(
@@ -187,12 +194,14 @@ class DashboardStatsResource(Resource):
         }
 
     def _get_quote_stats(self, date_from, date_to):
-        """Get detailed quote request statistics"""
+        """Get detailed quote request statistics - FIXED"""
+        # Build query with proper conditional filtering
         query = QuoteRequest.query
-        
         if date_from:
-            query = query.filter(QuoteRequest.created_at >= date_from)
-            query = query.filter(QuoteRequest.created_at <= date_to)
+            query = query.filter(
+                QuoteRequest.created_at >= date_from,
+                QuoteRequest.created_at <= date_to
+            )
 
         # Status breakdown
         status_counts = {}
@@ -203,23 +212,33 @@ class DashboardStatsResource(Resource):
         # Quotes with conflicts
         conflicted_quotes = query.filter_by(has_conflict=True).count()
 
-        # Average quote amount (where quoted_amount is not null)
-        avg_quote = db.session.query(
+        # Average quote amount - FIXED
+        avg_query = db.session.query(
             func.avg(QuoteRequest.quoted_amount)
-        ).filter(
-            QuoteRequest.quoted_amount.isnot(None),
-            QuoteRequest.created_at >= date_from if date_from else True
-        ).scalar()
+        ).filter(QuoteRequest.quoted_amount.isnot(None))
+        
+        if date_from:
+            avg_query = avg_query.filter(
+                QuoteRequest.created_at >= date_from,
+                QuoteRequest.created_at <= date_to
+            )
+        
+        avg_quote = avg_query.scalar()
 
-        # Response time (average time to send quote)
-        avg_response_time = db.session.query(
+        # Response time - FIXED
+        response_query = db.session.query(
             func.avg(
                 func.extract('epoch', QuoteRequest.quote_sent_at - QuoteRequest.created_at)
             )
-        ).filter(
-            QuoteRequest.quote_sent_at.isnot(None),
-            QuoteRequest.created_at >= date_from if date_from else True
-        ).scalar()
+        ).filter(QuoteRequest.quote_sent_at.isnot(None))
+        
+        if date_from:
+            response_query = response_query.filter(
+                QuoteRequest.created_at >= date_from,
+                QuoteRequest.created_at <= date_to
+            )
+        
+        avg_response_time = response_query.scalar()
 
         return {
             "by_status": status_counts,
@@ -230,34 +249,52 @@ class DashboardStatsResource(Resource):
         }
 
     def _get_revenue_stats(self, date_from, date_to):
-        """Get revenue-related statistics"""
+        """Get revenue-related statistics - FIXED"""
         # Total quoted amount (accepted quotes)
-        total_quoted = db.session.query(
+        total_query = db.session.query(
             func.sum(QuoteRequest.quoted_amount)
-        ).filter(
-            QuoteRequest.status == QuoteStatus.ACCEPTED,
-            QuoteRequest.created_at >= date_from if date_from else True,
-            QuoteRequest.created_at <= date_to if date_from else True
-        ).scalar() or 0
+        ).filter(QuoteRequest.status == QuoteStatus.ACCEPTED)
+        
+        if date_from:
+            total_query = total_query.filter(
+                QuoteRequest.created_at >= date_from,
+                QuoteRequest.created_at <= date_to
+            )
+        
+        total_quoted = total_query.scalar() or 0
 
         # Potential revenue (pending quotes)
-        potential_revenue = db.session.query(
+        potential_query = db.session.query(
             func.sum(QuoteRequest.quoted_amount)
         ).filter(
             QuoteRequest.status.in_([QuoteStatus.PENDING, QuoteStatus.SENT]),
-            QuoteRequest.quoted_amount.isnot(None),
-            QuoteRequest.created_at >= date_from if date_from else True
-        ).scalar() or 0
+            QuoteRequest.quoted_amount.isnot(None)
+        )
+        
+        if date_from:
+            potential_query = potential_query.filter(
+                QuoteRequest.created_at >= date_from,
+                QuoteRequest.created_at <= date_to
+            )
+        
+        potential_revenue = potential_query.scalar() or 0
 
-        # Revenue by service category (from accepted quotes)
-        revenue_by_service = db.session.query(
+        # Revenue by service category - FIXED
+        revenue_query = db.session.query(
             QuoteRequest.selected_services,
             func.sum(QuoteRequest.quoted_amount).label('revenue')
         ).filter(
             QuoteRequest.status == QuoteStatus.ACCEPTED,
-            QuoteRequest.quoted_amount.isnot(None),
-            QuoteRequest.created_at >= date_from if date_from else True
-        ).group_by(QuoteRequest.selected_services).all()
+            QuoteRequest.quoted_amount.isnot(None)
+        )
+        
+        if date_from:
+            revenue_query = revenue_query.filter(
+                QuoteRequest.created_at >= date_from,
+                QuoteRequest.created_at <= date_to
+            )
+        
+        revenue_by_service = revenue_query.group_by(QuoteRequest.selected_services).all()
 
         return {
             "total_quoted": float(total_quoted),
@@ -294,7 +331,7 @@ class DashboardStatsResource(Resource):
         }
 
     def _get_trends_data(self, date_from, date_to):
-        """Get trend data for charts"""
+        """Get trend data for charts - FIXED"""
         if not date_from:
             date_from = date.today() - timedelta(days=30)
 
@@ -417,8 +454,10 @@ class DashboardStatsResource(Resource):
         """Calculate booking conversion rate (confirmed/total)"""
         query = Booking.query
         if date_from:
-            query = query.filter(Booking.created_at >= date_from)
-            query = query.filter(Booking.created_at <= date_to)
+            query = query.filter(
+                Booking.created_at >= date_from,
+                Booking.created_at <= date_to
+            )
         
         total = query.count()
         if total == 0:
@@ -431,8 +470,10 @@ class DashboardStatsResource(Resource):
         """Calculate quote acceptance rate"""
         query = QuoteRequest.query
         if date_from:
-            query = query.filter(QuoteRequest.created_at >= date_from)
-            query = query.filter(QuoteRequest.created_at <= date_to)
+            query = query.filter(
+                QuoteRequest.created_at >= date_from,
+                QuoteRequest.created_at <= date_to
+            )
         
         sent = query.filter_by(status=QuoteStatus.SENT).count()
         accepted = query.filter_by(status=QuoteStatus.ACCEPTED).count()
@@ -450,12 +491,7 @@ class DashboardStatsResource(Resource):
 class NotificationCountResource(Resource):
     """
     Get unread notification count for navbar badge
-    Counts ONLY actionable items that require immediate attention:
-    - Pending bookings (need to be confirmed/processed)
-    - Pending quotes (need to be reviewed and quoted)
-    
-    NOTE: Conflicts are NOT counted here as they're informational,
-    not blocking actions. Users can navigate to quotes page to see them.
+    Counts ONLY actionable items that require immediate attention
     """
     
     @jwt_required()
@@ -471,25 +507,19 @@ class NotificationCountResource(Resource):
             # Count ONLY items requiring immediate action
             alert_count = 0
             
-            # ====================
-            # BOOKING ALERTS
-            # ====================
             # Pending bookings need confirmation
             pending_bookings = Booking.query.filter_by(
                 status=BookingStatus.PENDING
             ).count()
             alert_count += pending_bookings
             
-            # ====================
-            # QUOTE ALERTS
-            # ====================
-            # Count ONLY PENDING quotes (need to be processed and quoted)
+            # Count ONLY PENDING quotes
             pending_quotes = QuoteRequest.query.filter_by(
                 status=QuoteStatus.PENDING
             ).count()
             alert_count += pending_quotes
             
-            # Additional metrics for breakdown (informational only, not in main count)
+            # Additional metrics for breakdown
             total_conflicted_quotes = QuoteRequest.query.filter_by(
                 has_conflict=True
             ).filter(
@@ -535,7 +565,6 @@ class NotificationCountResource(Resource):
 class QuoteSummaryResource(Resource):
     """
     Get quick quote statistics for navbar badges
-    Returns counts needed for badge display on Quotes menu items
     """
     
     @jwt_required()
@@ -561,14 +590,14 @@ class QuoteSummaryResource(Resource):
                 status=QuoteStatus.ACCEPTED
             ).count()
             
-            # Conflict count (active quotes with conflicts)
+            # Conflict count
             conflict_count = QuoteRequest.query.filter_by(
                 has_conflict=True
             ).filter(
                 QuoteRequest.status.in_([QuoteStatus.PENDING, QuoteStatus.SENT])
             ).count()
             
-            # Action required (ONLY pending quotes - these need immediate attention)
+            # Action required
             action_required = pending_count
 
             return {
@@ -593,9 +622,6 @@ class QuoteSummaryResource(Resource):
 # =====================================================
 def register_dashboard_resources(api):
     """Register dashboard statistics and navbar helper endpoints"""
-    # Main dashboard stats
     api.add_resource(DashboardStatsResource, "/admin/dashboard/stats")
-    
-    # Navbar helper endpoints
     api.add_resource(NotificationCountResource, "/notifications/unread-count")
     api.add_resource(QuoteSummaryResource, "/quotes/summary")
