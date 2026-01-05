@@ -8,22 +8,22 @@ ENV PYTHONUNBUFFERED=1
 # Set working directory
 WORKDIR /app
 
-# System dependencies (Postgres, Pillow, etc.)
+# System dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies first (better caching)
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Copy project files
 COPY . .
 
-# Expose port (Koyeb will override)
+# Expose port
 EXPOSE 8000
 
-# Run with gunicorn
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "run:app"]
+# Optimized Gunicorn command - 1 worker, 4 threads
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--worker-class", "gthread", "--timeout", "120", "--preload", "--max-requests", "1000", "--max-requests-jitter", "100", "run:app"]
