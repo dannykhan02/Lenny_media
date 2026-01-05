@@ -30,8 +30,8 @@ class ProductionConfig(Config):
     
     # Production database pool settings (optimized for Koyeb)
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_size': 5,              # Maintain 5 connections
-        'max_overflow': 10,          # Allow 10 extra connections if needed
+        'pool_size': 2,              # Maintain 5 connections
+        'max_overflow': 3,          # Allow 10 extra connections if needed
         'pool_timeout': 30,          # Wait 30s for available connection
         'pool_recycle': 1800,        # Recycle connections every 30 min
         'pool_pre_ping': True,       # Test connection before using

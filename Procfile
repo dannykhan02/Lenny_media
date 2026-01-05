@@ -1,3 +1,1 @@
-cat > Procfile << 'EOF'
-web: flask db upgrade && gunicorn --bind 0.0.0.0:$PORT --workers 4 --timeout 300 --access-logfile - --error-logfile - run:app
-EOF
+web: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --worker-class gthread --timeout 120 --preload --max-requests 1000 --max-requests-jitter 100 run:app
