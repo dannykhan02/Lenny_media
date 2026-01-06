@@ -1,9 +1,9 @@
 """
 Email Templates Module
 HTML email templates for booking notifications
-Updated: No booking ID display, WhatsApp uses same phone number
+Updated: Added time change policy, time change template, and cancellation template
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import current_app
 
 
@@ -458,7 +458,7 @@ def get_whatsapp_link(phone: str) -> str:
 def booking_confirmation_template(booking):
     """
     Generate HTML template for client booking confirmation email
-    Updated: No booking ID display, WhatsApp uses same phone number
+    Updated: Includes notice about possible time changes
     """
     studio_info = get_studio_info()
     whatsapp_link = get_whatsapp_link(studio_info['whatsapp'])
@@ -529,6 +529,24 @@ def booking_confirmation_template(booking):
                     We'll get back to you within 24 hours to confirm your session
                 </p>
             </div>
+            
+            {f'''<div class="warning-box">
+                <h3 style="color: #92400E;">⏰ Important: Time Change Policy</h3>
+                <p style="margin: 8px 0 0 0; color: #92400E; line-height: 1.8;">
+                    Your preferred time of <strong>{booking.preferred_time.strftime('%I:%M %p')}</strong> has been noted. 
+                    Please be aware that we may need to adjust your session time based on:<br><br>
+                    • Studio availability and scheduling conflicts<br>
+                    • Equipment or crew availability<br>
+                    • Weather conditions (for outdoor sessions)<br>
+                    • Other logistical considerations<br><br>
+                    <strong>If a time change is necessary, we will:</strong><br>
+                    1. Provide a clear reason for the change<br>
+                    2. Offer alternative times close to your preference<br>
+                    3. Send you an updated booking confirmation<br>
+                    4. Work with you to find the best solution<br><br>
+                    We will always notify you promptly if any changes are needed and ensure the new time works for you.
+                </p>
+            </div>''' if booking.preferred_time else ''}
             
             <div class="info-box">
                 <h3>📋 Booking Summary</h3>
@@ -925,99 +943,104 @@ def booking_status_update_template(booking, old_status, new_status):
 
 
 # ============================================================================
-# BOOKING UPDATED EMAIL (Details changed)
+# BOOKING TIME CHANGE EMAIL
 # ============================================================================
 
-def booking_updated_template(booking, updates, updated_by):
+def booking_time_change_template(booking, old_time, new_time, reason):
     """
-    Generate HTML template for when booking details are updated (excluding status changes)
-    Updated: No booking ID display
+    Generate HTML template for booking time change notification
     """
     studio_info = get_studio_info()
     whatsapp_link = get_whatsapp_link(studio_info['whatsapp'])
     
-    # Create update summary
-    update_summary = []
-    for field, (old_value, new_value) in updates.items():
-        if field == 'preferred_date' and old_value:
-            old_value = old_value.strftime('%B %d, %Y')
-            new_value = new_value.strftime('%B %d, %Y')
-        elif field == 'preferred_time' and old_value:
-            old_value = old_value.strftime('%I:%M %p') if hasattr(old_value, 'strftime') else old_value
-            new_value = new_value.strftime('%I:%M %p') if hasattr(new_value, 'strftime') else new_value
-        elif field == 'budget_range':
-            old_value = f"KES {old_value}" if old_value else "Not specified"
-            new_value = f"KES {new_value}" if new_value else "Not specified"
-        
-        field_display = field.replace('_', ' ').title()
-        update_summary.append(f"""
-            <div class="info-row" style="background: {COLORS['light']}; padding: 12px; border-radius: 4px; margin-bottom: 8px;">
-                <span class="info-label" style="font-weight: 600;">{field_display}:</span>
-                <span class="info-value" style="text-align: left;">
-                    <span style="color: {COLORS['danger']}; text-decoration: line-through;">{old_value if old_value else 'Not set'}</span> 
-                    → 
-                    <span style="color: {COLORS['success']}; font-weight: 600;">{new_value if new_value else 'Not set'}</span>
-                </span>
-            </div>
-        """)
+    old_time_display = old_time.strftime('%I:%M %p') if old_time else "Not specified"
+    new_time_display = new_time.strftime('%I:%M %p') if new_time else "Not specified"
     
     content = f"""
-        <div class="header">
-            <div class="booking-badge">📝 Booking Updated</div>
-            <h1>🔄 Booking Details Modified</h1>
-            <p>Your booking has been updated by our team</p>
+        <div class="header" style="background: linear-gradient(135deg, {COLORS['warning']} 0%, #D97706 100%);">
+            <div class="booking-badge" style="background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); color: #92400E; border-color: {COLORS['warning']};">
+                ⏰ TIME UPDATED
+            </div>
+            <h1>⏰ Booking Time Changed</h1>
+            <p>Your session time has been updated</p>
         </div>
         
         <div class="content">
             <div class="greeting">Hello {booking.client_name},</div>
             
             <div class="message">
-                Our team has updated some details of your <strong>{booking.service_type}</strong> booking to better accommodate your needs.
-            </div>
-            
-            <div class="info-box">
-                <h3>📋 Updated Information</h3>
-                {"".join(update_summary)}
-                
-                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid {COLORS['border']}; color: #6B7280; font-size: 14px;">
-                    <p style="margin: 0;"><strong>Updated by:</strong> {updated_by}<br>
-                    <strong>Updated on:</strong> {booking.updated_at.strftime('%B %d, %Y at %I:%M %p')}</p>
-                </div>
-            </div>
-            
-            <!-- Current Booking Status -->
-            <div style="background: {COLORS['light']}; padding: 20px; border-radius: 8px; margin: 25px 0; border: 1px solid {COLORS['border']}; text-align: center;">
-                <p style="margin: 0 0 10px 0; font-weight: 600; color: {COLORS['dark']}; font-size: 15px;">Current Booking Status</p>
-                <div class="status-badge" style="background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); color: #92400E; border: 2px solid {COLORS['warning']};">
-                    {booking.status.value if booking.status else 'PENDING'}
-                </div>
+                We need to inform you about a change to your <strong>{booking.service_type}</strong> session time 
+                scheduled for <strong>{booking.preferred_date.strftime('%A, %B %d, %Y')}</strong>.
             </div>
             
             <div class="warning-box">
-                <h3 style="color: #92400E;">❓ Questions About These Changes?</h3>
-                <p style="margin: 8px 0 0 0; color: #92400E; line-height: 1.8;">
-                    If you have any questions or need to discuss these modifications, please contact us:<br>
-                    📞 <a href="tel:{studio_info['phone']}" style="color: #92400E; text-decoration: none; font-weight: 600;">{studio_info['phone']}</a><br>
-                    📧 <a href="mailto:{studio_info['email']}" style="color: #92400E; text-decoration: none; font-weight: 600;">{studio_info['email']}</a>
+                <h3 style="color: #92400E;">📋 Reason for Time Change</h3>
+                <p style="margin: 0; color: #92400E; line-height: 1.8; padding: 15px; background: {COLORS['white']}; border-radius: 4px; border: 1px solid {COLORS['warning']};">
+                    <strong>{reason}</strong>
+                </p>
+            </div>
+            
+            <div style="background: {COLORS['light']}; padding: 25px; margin: 25px 0; border-radius: 8px; border: 1px solid {COLORS['border']};">
+                <h3 style="margin: 0 0 20px 0; color: {COLORS['dark']}; text-align: center;">Time Change Summary</h3>
+                
+                <div style="display: table; width: 100%; margin-bottom: 15px;">
+                    <div style="display: table-row;">
+                        <div style="display: table-cell; padding: 12px; background: #FEE2E2; border-radius: 6px; width: 45%; text-align: center;">
+                            <p style="margin: 0 0 8px 0; font-size: 13px; color: #7F1D1D; font-weight: 600; text-transform: uppercase;">Previous Time</p>
+                            <p style="margin: 0; font-size: 24px; color: {COLORS['danger']}; font-weight: 700; text-decoration: line-through;">
+                                {old_time_display}
+                            </p>
+                        </div>
+                        <div style="display: table-cell; width: 10%; text-align: center; vertical-align: middle; font-size: 28px; color: {COLORS['warning']};">
+                            →
+                        </div>
+                        <div style="display: table-cell; padding: 12px; background: #D1FAE5; border-radius: 6px; width: 45%; text-align: center;">
+                            <p style="margin: 0 0 8px 0; font-size: 13px; color: #065F46; font-weight: 600; text-transform: uppercase;">New Time</p>
+                            <p style="margin: 0; font-size: 24px; color: {COLORS['success']}; font-weight: 700;">
+                                {new_time_display}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="text-align: center; padding-top: 15px; border-top: 1px solid {COLORS['border']};">
+                    <p style="margin: 0; color: #6B7280; font-size: 14px;">
+                        <strong>Session Date:</strong> {booking.preferred_date.strftime('%A, %B %d, %Y')}<br>
+                        <strong>Service:</strong> {booking.service_type}
+                    </p>
+                </div>
+            </div>
+            
+            <div class="info-box">
+                <h3>❓ Not Happy With The New Time?</h3>
+                <p style="margin: 0; color: #4B5563; line-height: 1.8;">
+                    We understand schedule changes can be inconvenient. If the new time doesn't work for you, 
+                    please contact us <strong>immediately</strong> and we'll work together to find an alternative solution.
+                    <br><br>
+                    <strong>Your options:</strong><br>
+                    • Request a different time slot<br>
+                    • Reschedule to another date<br>
+                    • Discuss alternative arrangements<br>
+                    • Cancel if necessary (with full refund if applicable)
                 </p>
             </div>
             
             <div class="contact-section">
-                <h3>💬 Need to Discuss These Changes?</h3>
+                <h3>📞 Contact Us Immediately</h3>
                 <p style="margin: 0 0 15px 0; color: #6B7280; font-size: 14px;">
-                    If these changes don't work for you, please reply to this email or contact us directly to discuss alternatives.
+                    Please respond to this email or contact us directly if you have any concerns about the time change.
                 </p>
                 <div class="contact-methods">
-                    {f'''<div class="contact-item">
-                        <span class="contact-icon">💬</span>
-                        <span class="contact-label">WhatsApp:</span>
-                        <span class="contact-value"><a href="{whatsapp_link}">Chat with us</a></span>
-                    </div>''' if studio_info['whatsapp'] else ''}
                     {f'''<div class="contact-item">
                         <span class="contact-icon">📱</span>
                         <span class="contact-label">Call Us:</span>
                         <span class="contact-value"><a href="tel:{studio_info['phone']}">{studio_info['phone']}</a></span>
                     </div>''' if studio_info['phone'] else ''}
+                    {f'''<div class="contact-item">
+                        <span class="contact-icon">💬</span>
+                        <span class="contact-label">WhatsApp:</span>
+                        <span class="contact-value"><a href="{whatsapp_link}">Message us now</a></span>
+                    </div>''' if studio_info['whatsapp'] else ''}
                     {f'''<div class="contact-item">
                         <span class="contact-icon">✉️</span>
                         <span class="contact-label">Email:</span>
@@ -1026,10 +1049,127 @@ def booking_updated_template(booking, updates, updated_by):
                 </div>
             </div>
             
-            <p style="margin-top: 30px; color: #6B7280; font-size: 15px; line-height: 1.7; text-align: center;">
-                <em>If these changes don't work for you, please reply to this email within 24 hours.</em>
-            </p>
+            <div style="background: {COLORS['light']}; padding: 20px; border-radius: 8px; margin-top: 30px; text-align: center; border: 1px solid {COLORS['border']};">
+                <p style="margin: 0; color: {COLORS['dark']}; font-size: 15px; font-weight: 600;">
+                    We apologize for any inconvenience! 🙏
+                </p>
+                <p style="margin: 10px 0 0 0; color: #6B7280; font-size: 14px;">
+                    We're committed to delivering the best experience possible.<br>
+                    <strong>The {studio_info['name']} Team</strong>
+                </p>
+            </div>
         </div>
 """
     
-    return get_base_booking_template(content, f"Booking Updated - {studio_info['name']}")
+    return get_base_booking_template(content, f"Booking Time Updated - {studio_info['name']}")
+
+
+# ============================================================================
+# BOOKING CANCELLATION EMAIL
+# ============================================================================
+
+def booking_cancellation_template(booking, reason):
+    """
+    Generate HTML template for booking cancellation/deletion notification
+    """
+    studio_info = get_studio_info()
+    whatsapp_link = get_whatsapp_link(studio_info['whatsapp'])
+    
+    content = f"""
+        <div class="header" style="background: linear-gradient(135deg, {COLORS['danger']} 0%, #DC2626 100%);">
+            <div class="booking-badge" style="background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%); color: #7F1D1D; border-color: {COLORS['danger']};">
+                ❌ BOOKING CANCELLED
+            </div>
+            <h1>❌ Booking Cancelled</h1>
+            <p>Your booking has been cancelled</p>
+        </div>
+        
+        <div class="content">
+            <div class="greeting">Hello {booking.client_name},</div>
+            
+            <div class="message">
+                We regret to inform you that your <strong>{booking.service_type}</strong> session 
+                scheduled for <strong>{booking.preferred_date.strftime('%A, %B %d, %Y')}</strong>
+                {f"at <strong>{booking.preferred_time.strftime('%I:%M %p')}</strong>" if booking.preferred_time else ""} 
+                has been cancelled.
+            </div>
+            
+            <div class="danger-box">
+                <h3 style="color: #7F1D1D;">📋 Reason for Cancellation</h3>
+                <p style="margin: 0; color: #7F1D1D; line-height: 1.8; padding: 15px; background: {COLORS['white']}; border-radius: 4px; border: 1px solid {COLORS['danger']};">
+                    <strong>{reason}</strong>
+                </p>
+            </div>
+            
+            <div class="info-box">
+                <h3>📋 Cancelled Booking Details</h3>
+                <div class="info-row">
+                    <span class="info-label">Service Type:</span>
+                    <span class="info-value">{booking.service_type}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Scheduled Date:</span>
+                    <span class="info-value">{booking.preferred_date.strftime('%A, %B %d, %Y')}</span>
+                </div>
+                {f'''<div class="info-row">
+                    <span class="info-label">Scheduled Time:</span>
+                    <span class="info-value">{booking.preferred_time.strftime('%I:%M %p')}</span>
+                </div>''' if booking.preferred_time else ''}
+                {f'''<div class="info-row">
+                    <span class="info-label">Location:</span>
+                    <span class="info-value">{booking.location}</span>
+                </div>''' if booking.location else ''}
+                <div class="info-row">
+                    <span class="info-label">Cancellation Date:</span>
+                    <span class="info-value">{datetime.now(timezone.utc).strftime('%B %d, %Y at %I:%M %p')}</span>
+                </div>
+            </div>
+            
+            <div class="warning-box">
+                <h3 style="color: #92400E;">💡 What You Can Do</h3>
+                <p style="margin: 0; color: #92400E; line-height: 1.8;">
+                    <strong>✓ Reschedule:</strong> Book a new session at a time that works better<br>
+                    <strong>✓ Alternative Services:</strong> Explore other services that might fit your needs<br>
+                    <strong>✓ Refund Request:</strong> Contact us about refund eligibility if payment was made<br>
+                    <strong>✓ Questions:</strong> Reach out to discuss this cancellation or future bookings
+                </p>
+            </div>
+            
+            <div class="contact-section">
+                <h3>📞 Have Questions? Let's Talk</h3>
+                <p style="margin: 0 0 15px 0; color: #6B7280; font-size: 14px;">
+                    We're here to help. If you'd like to discuss this cancellation, reschedule, 
+                    or explore other options, please don't hesitate to contact us.
+                </p>
+                <div class="contact-methods">
+                    {f'''<div class="contact-item">
+                        <span class="contact-icon">📱</span>
+                        <span class="contact-label">Call Us:</span>
+                        <span class="contact-value"><a href="tel:{studio_info['phone']}">{studio_info['phone']}</a></span>
+                    </div>''' if studio_info['phone'] else ''}
+                    {f'''<div class="contact-item">
+                        <span class="contact-icon">💬</span>
+                        <span class="contact-label">WhatsApp:</span>
+                        <span class="contact-value"><a href="{whatsapp_link}">Chat with us</a></span>
+                    </div>''' if studio_info['whatsapp'] else ''}
+                    {f'''<div class="contact-item">
+                        <span class="contact-icon">✉️</span>
+                        <span class="contact-label">Email:</span>
+                        <span class="contact-value"><a href="mailto:{studio_info['email']}">{studio_info['email']}</a></span>
+                    </div>''' if studio_info['email'] else ''}
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px; padding: 20px; background-color: {COLORS['light']}; border-radius: 8px;">
+                <p style="margin: 0; color: {COLORS['dark']}; font-size: 15px; font-weight: 600;">
+                    We hope to work with you in the future! 🎬
+                </p>
+                <p style="margin: 10px 0 0 0; color: #6B7280; font-size: 14px;">
+                    Thank you for your understanding.<br>
+                    <strong>The {studio_info['name']} Team</strong>
+                </p>
+            </div>
+        </div>
+"""
+    
+    return get_base_booking_template(content, f"Booking Cancelled - {studio_info['name']}")

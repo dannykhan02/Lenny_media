@@ -3,7 +3,8 @@ from .email_templates import (
     booking_confirmation_template,
     admin_booking_alert_template,
     booking_status_update_template,
-    booking_updated_template
+    booking_time_change_template,     # NEW
+    booking_cancellation_template     # NEW
 )
 from .quote_email_template import (
     get_client_confirmation_email,

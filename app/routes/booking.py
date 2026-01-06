@@ -14,7 +14,9 @@ from ..services import (
     send_email,
     booking_confirmation_template,
     admin_booking_alert_template,
-    booking_status_update_template
+    booking_status_update_template,
+    booking_time_change_template,
+    booking_cancellation_template
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -71,6 +73,7 @@ class BookingResource(Resource):
                 service_type=data['serviceType'],
                 preferred_date=preferred_date,
                 preferred_time=preferred_time,
+                original_preferred_time=preferred_time,  # NEW: Store original time
                 location=data.get('location', '').strip() if data.get('location') else None,
                 budget_range=data.get('budget', '').strip() if data.get('budget') else None,
                 additional_notes=data.get('notes', '').strip() if data.get('notes') else None,
@@ -171,10 +174,12 @@ class BookingResource(Resource):
 
             logger.info(f"Updating booking {booking_id} with data: {data}")
 
-            # Track if status changed for email notification
+            # Track changes for email notification
             status_changed = False
+            time_changed = False
             old_status = booking.status
             old_status_name = old_status.value if old_status else None
+            old_time = booking.preferred_time
 
             # Update client information
             if "client_name" in data:
@@ -201,23 +206,32 @@ class BookingResource(Resource):
                     logger.error(f"Invalid date format: {data['preferred_date']} - {str(e)}")
                     return {"message": "Invalid date format. Use YYYY-MM-DD"}, 400
             
+            # NEW: Handle preferred_time changes with reason
             if "preferred_time" in data:
                 if data['preferred_time']:
                     try:
-                        # Handle both string time and already formatted time
                         if isinstance(data['preferred_time'], str):
                             time_str = data['preferred_time'].strip()
-                            
                             # Handle HH:MM:SS format (strip seconds)
                             if time_str.count(':') == 2:
                                 time_str = ':'.join(time_str.split(':')[:2])
-                            
-                            # Now parse HH:MM format
-                            preferred_time = datetime.strptime(time_str, '%H:%M').time()
+                            new_time = datetime.strptime(time_str, '%H:%M').time()
                         else:
-                            # If it's already a time object or something else
-                            preferred_time = data['preferred_time']
-                        booking.preferred_time = preferred_time
+                            new_time = data['preferred_time']
+                        
+                        # Check if time is actually changing
+                        if booking.preferred_time != new_time:
+                            # Require reason when changing time
+                            if 'time_change_reason' not in data or not data['time_change_reason']:
+                                return {
+                                    "message": "time_change_reason is required when changing preferred time"
+                                }, 400
+                            
+                            time_changed = True
+                            booking.preferred_time = new_time
+                            booking.time_change_reason = data['time_change_reason'].strip()
+                            logger.info(f"Time changed from {old_time} to {new_time} with reason: {booking.time_change_reason}")
+                            
                     except (ValueError, TypeError) as e:
                         logger.error(f"Invalid time format: {data['preferred_time']} - {str(e)}")
                         return {"message": "Invalid time format. Use HH:MM or HH:MM:SS"}, 400
@@ -233,7 +247,7 @@ class BookingResource(Resource):
             if "additional_notes" in data:
                 booking.additional_notes = data['additional_notes'].strip() if data['additional_notes'] else None
             
-            # Update status and handle status-specific timestamps
+            # Handle status changes (including cancellation)
             if "status" in data:
                 try:
                     # Handle both string status and numeric status
@@ -250,15 +264,22 @@ class BookingResource(Resource):
                         status_changed = True
                         booking.status = new_status
                         
-                        # Set timestamps based on status changes
                         current_time = datetime.now(timezone.utc)
                         if new_status == BookingStatus.CONFIRMED and old_status != BookingStatus.CONFIRMED:
                             booking.confirmed_at = current_time
                         elif new_status == BookingStatus.COMPLETED and old_status != BookingStatus.COMPLETED:
                             booking.completed_at = current_time
                         elif new_status == BookingStatus.CANCELLED:
-                            # Optionally set cancelled_at timestamp if you have that field
-                            pass
+                            # NEW: Require cancellation reason
+                            if 'cancellation_reason' not in data or not data['cancellation_reason']:
+                                return {
+                                    "message": "cancellation_reason is required when cancelling a booking"
+                                }, 400
+                            
+                            booking.cancelled_at = current_time
+                            booking.cancelled_by = user.id
+                            booking.cancellation_reason = data['cancellation_reason'].strip()
+                            logger.info(f"Booking cancelled by {user.email} with reason: {booking.cancellation_reason}")
                         
                 except (KeyError, ValueError) as e:
                     logger.error(f"Invalid status value: {data['status']} - {str(e)}")
@@ -288,7 +309,7 @@ class BookingResource(Resource):
             
             logger.info(f"Booking updated by admin {user.email}: {booking.id}")
             
-            # Send status update email to client if status changed
+            # Send appropriate email notifications
             if status_changed:
                 try:
                     new_status_name = booking.status.value
@@ -312,6 +333,30 @@ class BookingResource(Resource):
                 except Exception as email_error:
                     logger.error(f"Error sending status update email: {str(email_error)}")
             
+            # NEW: Send time change notification email
+            elif time_changed:
+                try:
+                    time_change_email_html = booking_time_change_template(
+                        booking=booking,
+                        old_time=old_time,
+                        new_time=booking.preferred_time,
+                        reason=booking.time_change_reason
+                    )
+                    
+                    time_change_email_sent = send_email(
+                        recipient=booking.client_email,
+                        subject=f"Booking Time Updated - {current_app.config['BUSINESS_NAME']}",
+                        html_body=time_change_email_html
+                    )
+                    
+                    if time_change_email_sent:
+                        logger.info(f"Time change email sent to client: {booking.client_email}")
+                    else:
+                        logger.warning(f"Failed to send time change email to client: {booking.client_email}")
+                        
+                except Exception as email_error:
+                    logger.error(f"Error sending time change email: {str(email_error)}")
+            
             return {"message": "Booking updated successfully", "booking": booking.as_dict()}, 200
 
         except Exception as e:
@@ -333,14 +378,39 @@ class BookingResource(Resource):
             if not booking:
                 return {"message": "Booking not found"}, 404
 
+            # NEW: Require deletion reason from request body
+            data = request.get_json()
+            if not data or 'deletion_reason' not in data or not data['deletion_reason']:
+                return {
+                    "message": "deletion_reason is required when deleting a booking"
+                }, 400
+
+            deletion_reason = data['deletion_reason'].strip()
+            
+            # Send cancellation email before deleting
+            try:
+                cancellation_email_html = booking_cancellation_template(
+                    booking=booking,
+                    reason=deletion_reason
+                )
+                
+                send_email(
+                    recipient=booking.client_email,
+                    subject=f"Booking Cancelled - {current_app.config['BUSINESS_NAME']}",
+                    html_body=cancellation_email_html
+                )
+                logger.info(f"Cancellation email sent to: {booking.client_email}")
+            except Exception as email_error:
+                logger.error(f"Error sending cancellation email: {str(email_error)}")
+
             booking_info = f"{booking.client_name} - {booking.service_type}"
             
             db.session.delete(booking)
             db.session.commit()
             
-            logger.info(f"Booking deleted by admin {user.email}: {booking_info}")
+            logger.info(f"Booking deleted by admin {user.email}: {booking_info} - Reason: {deletion_reason}")
             
-            return {"message": "Booking deleted successfully"}, 200
+            return {"message": "Booking deleted and cancellation email sent"}, 200
             
         except Exception as e:
             db.session.rollback()
@@ -683,12 +753,36 @@ class BookingBulkActionResource(Resource):
                     logger.info(f"Bulk unassigned {updated_count} bookings")
             
             elif action == 'delete':
+                # NEW: Require deletion reason for bulk delete
+                if 'deletion_reason' not in data or not data['deletion_reason']:
+                    return {
+                        "message": "deletion_reason is required for bulk delete action"
+                    }, 400
+                
+                deletion_reason = data['deletion_reason'].strip()
+                
                 for booking in bookings:
+                    # Send cancellation email before deleting
+                    try:
+                        cancellation_email_html = booking_cancellation_template(
+                            booking=booking,
+                            reason=deletion_reason
+                        )
+                        
+                        send_email(
+                            recipient=booking.client_email,
+                            subject=f"Booking Cancelled - {current_app.config['BUSINESS_NAME']}",
+                            html_body=cancellation_email_html
+                        )
+                        logger.info(f"Bulk cancellation email sent to: {booking.client_email}")
+                    except Exception as email_error:
+                        logger.error(f"Error sending bulk cancellation email to {booking.client_email}: {str(email_error)}")
+                    
                     db.session.delete(booking)
                     updated_count += 1
                 
                 db.session.commit()
-                logger.info(f"Bulk delete: {updated_count} bookings deleted by admin {user.email}")
+                logger.info(f"Bulk delete: {updated_count} bookings deleted by admin {user.email} - Reason: {deletion_reason}")
                 return {"message": f"{updated_count} bookings deleted successfully"}, 200
             
             else:
@@ -713,6 +807,121 @@ class BookingBulkActionResource(Resource):
             return {"message": "An error occurred during bulk action"}, 500
 
 
+class BookingCleanupResource(Resource):
+    """Resource for cleaning up old bookings."""
+    
+    # Configuration constant - can be changed
+    CLEANUP_THRESHOLD_MONTHS = 2  # Default: 2 months
+    
+    @jwt_required()
+    def post(self):
+        """Clean up bookings older than threshold (ADMIN only)."""
+        try:
+            current_user_id = get_jwt_identity()
+            user = User.query.get(current_user_id)
+
+            if not user or user.role != UserRole.ADMIN:
+                return {"message": "Only admins can perform cleanup"}, 403
+
+            # Get custom threshold from request or use default
+            data = request.get_json() or {}
+            months_threshold = data.get('months_threshold', self.CLEANUP_THRESHOLD_MONTHS)
+            
+            # Validate threshold
+            if not isinstance(months_threshold, int) or months_threshold < 1:
+                return {"message": "months_threshold must be a positive integer"}, 400
+
+            # Calculate cutoff date
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=months_threshold * 30)
+            
+            # Find old bookings
+            old_bookings = Booking.query.filter(
+                Booking.created_at < cutoff_date
+            ).all()
+            
+            if not old_bookings:
+                return {
+                    "message": f"No bookings older than {months_threshold} months found",
+                    "deleted_count": 0,
+                    "cutoff_date": cutoff_date.isoformat()
+                }, 200
+
+            deleted_count = len(old_bookings)
+            deleted_info = []
+            
+            for booking in old_bookings:
+                deleted_info.append({
+                    "id": booking.id,
+                    "client_name": booking.client_name,
+                    "service_type": booking.service_type,
+                    "created_at": booking.created_at.isoformat(),
+                    "status": booking.status.value
+                })
+                db.session.delete(booking)
+            
+            db.session.commit()
+            
+            logger.info(f"Cleanup: {deleted_count} bookings older than {months_threshold} months deleted by admin {user.email}")
+            
+            return {
+                "message": f"Successfully deleted {deleted_count} bookings older than {months_threshold} months",
+                "deleted_count": deleted_count,
+                "cutoff_date": cutoff_date.isoformat(),
+                "months_threshold": months_threshold,
+                "deleted_bookings": deleted_info
+            }, 200
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error during cleanup: {str(e)}")
+            return {"message": "An error occurred during cleanup"}, 500
+
+    @jwt_required()
+    def get(self):
+        """Preview bookings that would be cleaned up (ADMIN only)."""
+        try:
+            current_user_id = get_jwt_identity()
+            user = User.query.get(current_user_id)
+
+            if not user or user.role != UserRole.ADMIN:
+                return {"message": "Only admins can access this endpoint"}, 403
+
+            # Get custom threshold from query params or use default
+            months_threshold = request.args.get('months_threshold', self.CLEANUP_THRESHOLD_MONTHS, type=int)
+            
+            if months_threshold < 1:
+                return {"message": "months_threshold must be a positive integer"}, 400
+
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=months_threshold * 30)
+            
+            old_bookings = Booking.query.filter(
+                Booking.created_at < cutoff_date
+            ).all()
+            
+            preview_info = []
+            for booking in old_bookings:
+                preview_info.append({
+                    "id": booking.id,
+                    "client_name": booking.client_name,
+                    "service_type": booking.service_type,
+                    "created_at": booking.created_at.isoformat(),
+                    "status": booking.status.value,
+                    "age_days": (datetime.now(timezone.utc) - booking.created_at).days
+                })
+            
+            return {
+                "message": f"Preview of bookings older than {months_threshold} months",
+                "count": len(old_bookings),
+                "cutoff_date": cutoff_date.isoformat(),
+                "months_threshold": months_threshold,
+                "bookings": preview_info
+            }, 200
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup preview: {str(e)}")
+            return {"message": "An error occurred"}, 500
+
+
 def register_booking_resources(api):
     """Registers the BookingResource routes with Flask-RESTful API."""
     # Public endpoint
@@ -725,6 +934,7 @@ def register_booking_resources(api):
     api.add_resource(BookingStatsResource, "/admin/bookings/stats")
     api.add_resource(NewBookingsCountResource, "/admin/bookings/new-count")
     api.add_resource(BookingBulkActionResource, "/admin/bookings/bulk-action")
+    api.add_resource(BookingCleanupResource, "/admin/bookings/cleanup")  # NEW
     
     # Public utility endpoints
     api.add_resource(BookingStatusResource, "/booking-statuses")
