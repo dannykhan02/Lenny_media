@@ -739,7 +739,8 @@ class BookingBulkActionResource(Resource):
                             booking.updated_at = datetime.now(timezone.utc)
                             updated_count += 1
                             
-                        logger.info(f"Bulk assigned {updated_count} bookings to user {assigned_user.name}")
+                        # FIX: Changed from assigned_user.name to assigned_user.full_name
+                        logger.info(f"Bulk assigned {updated_count} bookings to user {assigned_user.full_name}")
                         
                     except (ValueError, TypeError):
                         return {"message": "Invalid assigned_to value"}, 400
