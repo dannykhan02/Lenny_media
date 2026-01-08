@@ -807,75 +807,11 @@ class BookingBulkActionResource(Resource):
             return {"message": "An error occurred during bulk action"}, 500
 
 
-class BookingCleanupResource(Resource):
-    """Resource for cleaning up old bookings."""
+class BookingCleanupPreviewResource(Resource):
+    """Resource for previewing bookings that would be cleaned up."""
     
-    # Configuration constant - can be changed
-    CLEANUP_THRESHOLD_MONTHS = 2  # Default: 2 months
+    CLEANUP_THRESHOLD_MONTHS = 3  # Default: 3 months
     
-    @jwt_required()
-    def post(self):
-        """Clean up bookings older than threshold (ADMIN only)."""
-        try:
-            current_user_id = get_jwt_identity()
-            user = User.query.get(current_user_id)
-
-            if not user or user.role != UserRole.ADMIN:
-                return {"message": "Only admins can perform cleanup"}, 403
-
-            # Get custom threshold from request or use default
-            data = request.get_json() or {}
-            months_threshold = data.get('months_threshold', self.CLEANUP_THRESHOLD_MONTHS)
-            
-            # Validate threshold
-            if not isinstance(months_threshold, int) or months_threshold < 1:
-                return {"message": "months_threshold must be a positive integer"}, 400
-
-            # Calculate cutoff date
-            cutoff_date = datetime.now(timezone.utc) - timedelta(days=months_threshold * 30)
-            
-            # Find old bookings
-            old_bookings = Booking.query.filter(
-                Booking.created_at < cutoff_date
-            ).all()
-            
-            if not old_bookings:
-                return {
-                    "message": f"No bookings older than {months_threshold} months found",
-                    "deleted_count": 0,
-                    "cutoff_date": cutoff_date.isoformat()
-                }, 200
-
-            deleted_count = len(old_bookings)
-            deleted_info = []
-            
-            for booking in old_bookings:
-                deleted_info.append({
-                    "id": booking.id,
-                    "client_name": booking.client_name,
-                    "service_type": booking.service_type,
-                    "created_at": booking.created_at.isoformat(),
-                    "status": booking.status.value
-                })
-                db.session.delete(booking)
-            
-            db.session.commit()
-            
-            logger.info(f"Cleanup: {deleted_count} bookings older than {months_threshold} months deleted by admin {user.email}")
-            
-            return {
-                "message": f"Successfully deleted {deleted_count} bookings older than {months_threshold} months",
-                "deleted_count": deleted_count,
-                "cutoff_date": cutoff_date.isoformat(),
-                "months_threshold": months_threshold,
-                "deleted_bookings": deleted_info
-            }, 200
-            
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error during cleanup: {str(e)}")
-            return {"message": "An error occurred during cleanup"}, 500
-
     @jwt_required()
     def get(self):
         """Preview bookings that would be cleaned up (ADMIN only)."""
@@ -889,24 +825,47 @@ class BookingCleanupResource(Resource):
             # Get custom threshold from query params or use default
             months_threshold = request.args.get('months_threshold', self.CLEANUP_THRESHOLD_MONTHS, type=int)
             
+            # Validate threshold
             if months_threshold < 1:
                 return {"message": "months_threshold must be a positive integer"}, 400
 
+            # Calculate cutoff date
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=months_threshold * 30)
             
-            old_bookings = Booking.query.filter(
+            # Get status filter from query params
+            status_filter = request.args.get('status', type=str)
+            
+            # Build query for old bookings
+            query = Booking.query.filter(
                 Booking.created_at < cutoff_date
-            ).all()
+            )
+            
+            # Apply status filter if provided
+            if status_filter and status_filter.upper() in ['COMPLETED', 'CANCELLED']:
+                status_enum = BookingStatus[status_filter.upper()]
+                query = query.filter_by(status=status_enum)
+            else:
+                # Default: only completed and cancelled bookings for cleanup
+                query = query.filter(
+                    Booking.status.in_([BookingStatus.COMPLETED, BookingStatus.CANCELLED])
+                )
+            
+            old_bookings = query.all()
             
             preview_info = []
             for booking in old_bookings:
                 preview_info.append({
                     "id": booking.id,
                     "client_name": booking.client_name,
+                    "client_email": booking.client_email,
+                    "client_phone": booking.client_phone,
                     "service_type": booking.service_type,
                     "created_at": booking.created_at.isoformat(),
+                    "preferred_date": booking.preferred_date.isoformat() if booking.preferred_date else None,
                     "status": booking.status.value,
-                    "age_days": (datetime.now(timezone.utc) - booking.created_at).days
+                    "age_days": (datetime.now(timezone.utc) - booking.created_at).days,
+                    "assigned_to": booking.assigned_to,
+                    "internal_notes": booking.internal_notes
                 })
             
             return {
@@ -914,12 +873,176 @@ class BookingCleanupResource(Resource):
                 "count": len(old_bookings),
                 "cutoff_date": cutoff_date.isoformat(),
                 "months_threshold": months_threshold,
+                "status_filter": status_filter,
                 "bookings": preview_info
             }, 200
             
         except Exception as e:
-            logger.error(f"Error during cleanup preview: {str(e)}")
+            logger.error(f"Error during cleanup preview: {str(e)}", exc_info=True)
             return {"message": "An error occurred"}, 500
+
+
+class BookingCleanupStatsResource(Resource):
+    """Resource for getting cleanup statistics."""
+    
+    CLEANUP_THRESHOLD_MONTHS = 3  # Default: 3 months
+    
+    @jwt_required()
+    def get(self):
+        """Get cleanup statistics (ADMIN only)."""
+        try:
+            current_user_id = get_jwt_identity()
+            user = User.query.get(current_user_id)
+
+            if not user or user.role != UserRole.ADMIN:
+                return {"message": "Only admins can access this endpoint"}, 403
+
+            # Get custom threshold from query params or use default
+            months_threshold = request.args.get('months_threshold', self.CLEANUP_THRESHOLD_MONTHS, type=int)
+            
+            # Validate threshold
+            if months_threshold < 1:
+                return {"message": "months_threshold must be a positive integer"}, 400
+
+            # Calculate cutoff date
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=months_threshold * 30)
+            
+            # Get status filter from query params
+            status_filter = request.args.get('status', type=str)
+            
+            # Total bookings in the system
+            total_bookings = Booking.query.count()
+            
+            # Completed bookings
+            completed_bookings = Booking.query.filter_by(status=BookingStatus.COMPLETED).count()
+            
+            # Cancelled bookings
+            cancelled_bookings = Booking.query.filter_by(status=BookingStatus.CANCELLED).count()
+            
+            # Build query for eligible bookings
+            query = Booking.query.filter(
+                Booking.created_at < cutoff_date
+            )
+            
+            # Apply status filter if provided
+            if status_filter and status_filter.upper() in ['COMPLETED', 'CANCELLED']:
+                status_enum = BookingStatus[status_filter.upper()]
+                query = query.filter_by(status=status_enum)
+                eligible_for_cleanup = query.count()
+            else:
+                # Default: count completed and cancelled bookings
+                eligible_for_cleanup = Booking.query.filter(
+                    Booking.created_at < cutoff_date,
+                    Booking.status.in_([BookingStatus.COMPLETED, BookingStatus.CANCELLED])
+                ).count()
+            
+            stats = {
+                "total_bookings": total_bookings,
+                "completed_bookings": completed_bookings,
+                "cancelled_bookings": cancelled_bookings,
+                "eligible_for_cleanup": eligible_for_cleanup,
+                "cutoff_date": cutoff_date.isoformat(),
+                "months_threshold": months_threshold,
+                "status_filter": status_filter
+            }
+            
+            return {"stats": stats}, 200
+            
+        except Exception as e:
+            logger.error(f"Error fetching cleanup stats: {str(e)}", exc_info=True)
+            return {"message": "Error fetching cleanup statistics"}, 500
+
+
+class BookingCleanupResource(Resource):
+    """Resource for cleaning up old bookings."""
+    
+    CLEANUP_THRESHOLD_MONTHS = 3  # Default: 3 months
+    
+    @jwt_required()
+    def post(self):
+        """Clean up bookings older than threshold (ADMIN only)."""
+        try:
+            current_user_id = get_jwt_identity()
+            user = User.query.get(current_user_id)
+
+            if not user or user.role != UserRole.ADMIN:
+                return {"message": "Only admins can perform cleanup"}, 403
+
+            # Get data from request (could be JSON body or query params)
+            data = {}
+            if request.is_json:
+                data = request.get_json() or {}
+            
+            # Get months threshold from data or query params
+            months_threshold = data.get('months_threshold') or request.args.get('months_threshold', self.CLEANUP_THRESHOLD_MONTHS, type=int)
+            
+            # Get status filter from data or query params
+            status_filter = data.get('status') or request.args.get('status', type=str)
+            
+            # Validate threshold
+            if not isinstance(months_threshold, int) or months_threshold < 1:
+                return {"message": "months_threshold must be a positive integer"}, 400
+
+            # Calculate cutoff date
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=months_threshold * 30)
+            
+            # Build query for old bookings
+            query = Booking.query.filter(
+                Booking.created_at < cutoff_date
+            )
+            
+            # Apply status filter if provided
+            if status_filter and status_filter.upper() in ['COMPLETED', 'CANCELLED']:
+                status_enum = BookingStatus[status_filter.upper()]
+                query = query.filter_by(status=status_enum)
+            else:
+                # Default: only completed and cancelled bookings for cleanup
+                query = query.filter(
+                    Booking.status.in_([BookingStatus.COMPLETED, BookingStatus.CANCELLED])
+                )
+            
+            old_bookings = query.all()
+            
+            if not old_bookings:
+                return {
+                    "message": f"No bookings older than {months_threshold} months found",
+                    "deleted_count": 0,
+                    "cutoff_date": cutoff_date.isoformat(),
+                    "months_threshold": months_threshold,
+                    "status_filter": status_filter
+                }, 200
+
+            deleted_count = len(old_bookings)
+            deleted_info = []
+            
+            for booking in old_bookings:
+                deleted_info.append({
+                    "id": booking.id,
+                    "client_name": booking.client_name,
+                    "service_type": booking.service_type,
+                    "created_at": booking.created_at.isoformat(),
+                    "status": booking.status.value,
+                    "client_email": booking.client_email
+                })
+                db.session.delete(booking)
+            
+            db.session.commit()
+            
+            logger.info(f"Cleanup: {deleted_count} bookings older than {months_threshold} months deleted by admin {user.email}")
+            
+            return {
+                "message": f"Successfully deleted {deleted_count} bookings older than {months_threshold} months",
+                "deleted_count": deleted_count,
+                "cutoff_date": cutoff_date.isoformat(),
+                "months_threshold": months_threshold,
+                "status_filter": status_filter,
+                "deleted_bookings": deleted_info
+            }, 200
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
+            return {"message": "An error occurred during cleanup"}, 500
 
 
 def register_booking_resources(api):
@@ -934,7 +1057,11 @@ def register_booking_resources(api):
     api.add_resource(BookingStatsResource, "/admin/bookings/stats")
     api.add_resource(NewBookingsCountResource, "/admin/bookings/new-count")
     api.add_resource(BookingBulkActionResource, "/admin/bookings/bulk-action")
-    api.add_resource(BookingCleanupResource, "/admin/bookings/cleanup")  # NEW
+    
+    # Cleanup endpoints (NEW)
+    api.add_resource(BookingCleanupResource, "/admin/bookings/cleanup")  # POST for actual cleanup
+    api.add_resource(BookingCleanupPreviewResource, "/admin/bookings/cleanup/preview")  # NEW: GET for preview
+    api.add_resource(BookingCleanupStatsResource, "/admin/bookings/cleanup/stats")  # NEW: GET for stats
     
     # Public utility endpoints
     api.add_resource(BookingStatusResource, "/booking-statuses")
