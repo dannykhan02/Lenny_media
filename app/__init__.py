@@ -147,12 +147,8 @@ def create_app():
         return jsonify({"msg": "Authorization required", "error": "authorization_required"}), 401
     
     # ============================================
-    # HEALTH CHECK
+    # ROOT ENDPOINT
     # ============================================
-    @app.route('/health')
-    def health():
-        return {"status": "healthy", "timestamp": datetime.now().isoformat()}, 200
-
     @app.route('/')
     def index():
         return {

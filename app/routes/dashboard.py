@@ -24,6 +24,31 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class HealthCheckResource(Resource):
+    """
+    Health check endpoint for monitoring
+    """
+    
+    def get(self):
+        """Check API health status"""
+        try:
+            # Test database connection
+            db.session.execute('SELECT 1')
+            return {
+                "status": "healthy",
+                "timestamp": datetime.now().isoformat(),
+                "database": "connected"
+            }, 200
+        except Exception as e:
+            logger.error(f"Health check failed: {str(e)}")
+            return {
+                "status": "unhealthy",
+                "timestamp": datetime.now().isoformat(),
+                "database": "disconnected",
+                "error": str(e)
+            }, 500
+
+
 class DashboardStatsResource(Resource):
     """
     Comprehensive dashboard statistics for admin panel
@@ -624,6 +649,7 @@ class QuoteSummaryResource(Resource):
 # =====================================================
 def register_dashboard_resources(api):
     """Register dashboard statistics and navbar helper endpoints"""
+    api.add_resource(HealthCheckResource, "/health")
     api.add_resource(DashboardStatsResource, "/admin/dashboard/stats")
     api.add_resource(NotificationCountResource, "/notifications/unread-count")
     api.add_resource(QuoteSummaryResource, "/quotes/summary")
