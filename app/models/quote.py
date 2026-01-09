@@ -1,5 +1,6 @@
 from app.db import db
 from sqlalchemy import Text, String, DECIMAL, Integer, Boolean, Date, Time, JSON, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 import enum
 
@@ -28,7 +29,7 @@ class QuoteRequest(db.Model):
     # =========================
     # Quote Request Details
     # =========================
-    selected_services = db.Column(JSON, nullable=False)
+    selected_services = db.Column(JSONB, nullable=False)
 
     event_date = db.Column(Date, nullable=True, index=True)
     event_time = db.Column(Time, nullable=True, index=True)

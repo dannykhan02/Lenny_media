@@ -275,11 +275,11 @@ def get_cloudinary_config_endpoint():
     try:
         config = get_cloudinary_config()
         
-        # Return safe configuration (without exposing full API key)
+        # Convert set to list for JSON serialization
         safe_config = {
             "cloud_name": config['cloud_name'],
             "upload_folder": config['upload_folder'],
-            "allowed_formats": config['allowed_formats'],
+            "allowed_formats": list(config['allowed_formats']),  # Convert set to list
             "max_file_size_mb": config['max_file_size'] // (1024 * 1024),
             "secure": config['secure'],
             "configured": bool(config['cloud_name'] and config['api_key'])
