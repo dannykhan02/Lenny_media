@@ -249,7 +249,7 @@ class DashboardStatsResource(Resource):
         }
 
     def _get_revenue_stats(self, date_from, date_to):
-        """Get revenue-related statistics - FIXED"""
+        """Get revenue-related statistics - OPTIMIZED with JSONB"""
         # Total quoted amount (accepted quotes)
         total_query = db.session.query(
             func.sum(QuoteRequest.quoted_amount)
@@ -279,7 +279,7 @@ class DashboardStatsResource(Resource):
         
         potential_revenue = potential_query.scalar() or 0
 
-        # Revenue by service category - FIXED
+        # Revenue by service - NOW WORKS with JSONB!
         revenue_query = db.session.query(
             QuoteRequest.selected_services,
             func.sum(QuoteRequest.quoted_amount).label('revenue')
@@ -294,7 +294,9 @@ class DashboardStatsResource(Resource):
                 QuoteRequest.created_at <= date_to
             )
         
-        revenue_by_service = revenue_query.group_by(QuoteRequest.selected_services).all()
+        revenue_by_service = revenue_query.group_by(
+            QuoteRequest.selected_services
+        ).all()
 
         return {
             "total_quoted": float(total_quoted),
