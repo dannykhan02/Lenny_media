@@ -4,6 +4,7 @@ Key fixes:
 1. Proper conditional filtering using SQLAlchemy patterns
 2. Removed invalid True/False in filter() calls
 3. Added proper error handling
+4. UPDATED: Health check now actually checks database and Cloudinary connections
 """
 
 import logging
@@ -11,7 +12,7 @@ from flask import request, jsonify
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, date, timedelta, timezone
-from sqlalchemy import func, and_, or_, extract
+from sqlalchemy import func, and_, or_, extract, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from ..models import User, UserRole
@@ -20,6 +21,10 @@ from ..models.quote import QuoteRequest, QuoteStatus
 from ..models.service import Service, ServiceCategory
 from .. import db
 
+import cloudinary
+import cloudinary.api
+from cloudinary.exceptions import Error as CloudinaryError
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -27,17 +32,81 @@ logger = logging.getLogger(__name__)
 class HealthCheckResource(Resource):
     """
     Health check endpoint for monitoring
-    Simple version that always returns 200
+    UPDATED: Now actually checks database and Cloudinary connections
     """
     
     def get(self):
-        """Check API health status - Always returns healthy"""
-        return {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "service": "Lenny Media API",
-            "version": "1.0.0"
-        }, 200
+        """Check API health status with real service checks"""
+        try:
+            health_data = {
+                "service": "Lenny Media API",
+                "version": "1.0.0",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Initialize health status for each service
+            database_status = "disconnected"
+            cloudinary_status = "disconnected"
+            
+            # Check Database Connection
+            try:
+                # Try to execute a simple query
+                db.session.execute(text('SELECT 1'))
+                database_status = "connected"
+                logger.info("Database health check: Connected")
+            except Exception as e:
+                logger.error(f"Database health check failed: {str(e)}")
+                database_status = "disconnected"
+            
+            # Check Cloudinary Connection
+            try:
+                # Try to ping Cloudinary API
+                # First, check if Cloudinary is configured
+                cloud_name = cloudinary.config().cloud_name
+                if not cloud_name:
+                    cloudinary_status = "disconnected"
+                    logger.warning("Cloudinary not configured")
+                else:
+                    # Try a simple API call - list resources with max_results=1 for efficiency
+                    result = cloudinary.api.resources(max_results=1, type="upload")
+                    # If we get here without exception, Cloudinary is working
+                    cloudinary_status = "connected"
+                    logger.info(f"Cloudinary health check: Connected (cloud: {cloud_name})")
+            except CloudinaryError as e:
+                logger.error(f"Cloudinary API error: {str(e)}")
+                cloudinary_status = "disconnected"
+            except Exception as e:
+                logger.error(f"Cloudinary health check failed: {str(e)}")
+                cloudinary_status = "disconnected"
+            
+            # Determine overall status
+            if database_status == "connected" and cloudinary_status == "connected":
+                overall_status = "healthy"
+            elif database_status == "disconnected" and cloudinary_status == "disconnected":
+                overall_status = "down"
+            else:
+                overall_status = "degraded"
+            
+            # Build response
+            health_data.update({
+                "status": overall_status,
+                "database": database_status,
+                "cloudinary": cloudinary_status
+            })
+            
+            return health_data, 200
+            
+        except Exception as e:
+            logger.error(f"Health check endpoint error: {str(e)}")
+            return {
+                "status": "down",
+                "database": "unknown",
+                "cloudinary": "unknown",
+                "service": "Lenny Media API",
+                "version": "1.0.0",
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e)
+            }, 500
 
 
 class DashboardStatsResource(Resource):
