@@ -38,18 +38,28 @@ class ProductionConfig(Config):
     }
     
     # ============================================
-    # PRODUCTION JWT SETTINGS - SECURE FOR NETLIFY
+    # PRODUCTION JWT SETTINGS - TOKEN-BASED AUTH
     # ============================================
-    JWT_COOKIE_SECURE = True              # HTTPS only (CRITICAL for production)
-    JWT_COOKIE_CSRF_PROTECT = False       # Disabled for cookie-based auth with CORS
-    JWT_COOKIE_SAMESITE = 'None'          # Required for cross-origin (Netlify → Koyeb)
+    # Use token-based authentication instead of cookies
+    JWT_TOKEN_LOCATION = ['headers']  # Look for JWT in Authorization header
+    JWT_HEADER_NAME = 'Authorization'
+    JWT_HEADER_TYPE = 'Bearer'
+    
+    # Token settings
+    JWT_ACCESS_TOKEN_EXPIRES = 86400  # 24 hours in seconds
+    
+    # Disable cookie settings since we're using tokens
+    JWT_COOKIE_SECURE = False  # Not using cookies
+    JWT_COOKIE_CSRF_PROTECT = False  # Not using cookies
+    JWT_SESSION_COOKIE = False  # Not using session cookies
     
     # ============================================
     # PRODUCTION SESSION SETTINGS
     # ============================================
-    SESSION_COOKIE_SECURE = True          # HTTPS only
-    SESSION_COOKIE_HTTPONLY = True        # Prevent JavaScript access
-    SESSION_COOKIE_SAMESITE = 'None'      # Cross-origin from Netlify
+    # Disable session cookies since we're using tokens
+    SESSION_COOKIE_SECURE = False
+    SESSION_COOKIE_HTTPONLY = False
+    SESSION_COOKIE_SAMESITE = None
     
     # ============================================
     # PRODUCTION CLOUDINARY SETTINGS

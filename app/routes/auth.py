@@ -1,13 +1,10 @@
-# app/routes/auth.py
-
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import (
     create_access_token, 
+    create_refresh_token,
     jwt_required, 
     get_jwt_identity, 
     get_jwt,
-    unset_jwt_cookies,
-    set_access_cookies,
     verify_jwt_in_request
 )
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -363,13 +360,23 @@ def login():
     user.last_login = datetime.utcnow()
     db.session.commit()
 
+    # Create access token (24 hours)
     access_token = create_access_token(
         identity=str(user.id),
         additional_claims={
             "email": user.email,
             "role": str(user.role.value)
         },
-        expires_delta=timedelta(days=1)
+        expires_delta=timedelta(hours=24)
+    )
+    
+    # Create refresh token (7 days)
+    refresh_token = create_refresh_token(
+        identity=str(user.id),
+        additional_claims={
+            "email": user.email,
+            "role": str(user.role.value)
+        }
     )
 
     # Generate optimized avatar URL with cache busting
@@ -383,8 +390,15 @@ def login():
             gravity='face'
         )
 
-    response = jsonify({
+    logger.info("ADMIN LOGIN SUCCESS")
+    logger.info(f"Admin: {user.email}")
+    logger.info(f"Admin ID: {user.id}")
+    logger.info("=" * 60)
+    
+    return jsonify({
         "message": "Login successful",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -395,26 +409,57 @@ def login():
             "avatar_public_id": user.avatar_public_id,
             "is_active": user.is_active
         }
-    })
-
-    # Use Flask-JWT-Extended's built-in function to set cookies
-    set_access_cookies(response, access_token)
-
-    logger.info("ADMIN LOGIN SUCCESS")
-    logger.info(f"Admin: {user.email}")
-    logger.info(f"Admin ID: {user.id}")
-    logger.info("=" * 60)
-    
-    return response, 200
+    }), 200
 
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required()
 def logout():
-    """Clear authentication cookie - only admins can logout (since only they can login)"""
-    response = jsonify({"message": "Logout successful"})
-    unset_jwt_cookies(response)
-    logger.info("Admin logged out - cookies cleared")
-    return response, 200
+    """Logout endpoint - client should discard tokens"""
+    logger.info("Admin logged out - tokens should be discarded client-side")
+    return jsonify({"message": "Logout successful"}), 200
+
+@auth_bp.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    """Refresh access token using refresh token"""
+    try:
+        current_user = get_jwt_identity()
+        claims = get_jwt()
+        
+        # Get user from database
+        def get_user_by_id():
+            return User.query.get(current_user)
+        
+        user = db_query_with_retry(get_user_by_id)
+        
+        if not user or not user.is_active:
+            return jsonify({"error": "User not found or inactive"}), 401
+        
+        # Create new access token
+        access_token = create_access_token(
+            identity=str(user.id),
+            additional_claims={
+                "email": user.email,
+                "role": str(user.role.value)
+            },
+            expires_delta=timedelta(hours=24)
+        )
+        
+        logger.info(f"Token refreshed for user: {user.email}")
+        
+        return jsonify({
+            "access_token": access_token,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "role": str(user.role.value),
+                "full_name": user.full_name
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Token refresh error: {str(e)}")
+        return jsonify({"error": "Failed to refresh token"}), 401
 
 @auth_bp.route('/register', methods=['POST'])
 def register():
@@ -473,18 +518,34 @@ def register_first_admin():
     db.session.add(new_admin)
     db.session.commit()
 
-    # Auto-login the admin
+    # Create access and refresh tokens
     access_token = create_access_token(
         identity=str(new_admin.id),
         additional_claims={
             "email": new_admin.email,
             "role": str(new_admin.role.value)
         },
-        expires_delta=timedelta(days=1)
+        expires_delta=timedelta(hours=24)
+    )
+    
+    refresh_token = create_refresh_token(
+        identity=str(new_admin.id),
+        additional_claims={
+            "email": new_admin.email,
+            "role": str(new_admin.role.value)
+        }
     )
 
-    response = jsonify({
+    logger.info("=" * 60)
+    logger.info("FIRST ADMIN REGISTRATION SUCCESS")
+    logger.info(f"Admin: {new_admin.email}")
+    logger.info(f"Admin ID: {new_admin.id}")
+    logger.info("=" * 60)
+    
+    return jsonify({
         "msg": "First admin registered successfully",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
         "admin_id": new_admin.id,
         "email": new_admin.email,
         "user": {
@@ -495,17 +556,7 @@ def register_first_admin():
             "phone": new_admin.phone,
             "is_active": new_admin.is_active
         }
-    })
-
-    set_access_cookies(response, access_token)
-
-    logger.info("=" * 60)
-    logger.info("FIRST ADMIN REGISTRATION SUCCESS")
-    logger.info(f"Admin: {new_admin.email}")
-    logger.info(f"Admin ID: {new_admin.id}")
-    logger.info("=" * 60)
-    
-    return response, 201
+    }), 201
 
 # ============================================
 # USER MANAGEMENT ROUTES WITH CLOUDINARY

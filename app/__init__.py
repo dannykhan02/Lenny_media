@@ -24,6 +24,17 @@ def create_app():
     config_class = get_config(config_name)
     app.config.from_object(config_class)
 
+    # Configure JWT for token-based auth
+    app.config['JWT_TOKEN_LOCATION'] = ['headers']  # Use Authorization header
+    app.config['JWT_HEADER_NAME'] = 'Authorization'
+    app.config['JWT_HEADER_TYPE'] = 'Bearer'
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 86400  # 24 hours
+    
+    # Disable cookie-based JWT
+    app.config['JWT_COOKIE_SECURE'] = False
+    app.config['JWT_COOKIE_CSRF_PROTECT'] = False
+    app.config['JWT_SESSION_COOKIE'] = False
+
     # Minimal startup logging
     if app.config.get('DEBUG'):
         print(f"🚀 Lenny Media API - {config_name.upper()}")
@@ -51,29 +62,28 @@ def create_app():
     )
 
     # ============================================
-    # CORS - FIXED FOR PREFLIGHT
+    # CORS - UPDATED FOR TOKEN-BASED AUTH
     # ============================================
     CORS(
         app,
         origins=app.config.get('CORS_ORIGINS', ["https://lennymedia.netlify.app"]),
-        supports_credentials=True,
-        expose_headers=["Set-Cookie", "Content-Type", "Authorization"],
+        supports_credentials=False,  # No cookies needed for token auth
         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         max_age=3600
     )
 
-    # Handle preflight manually
+    # Handle preflight requests
     @app.before_request
     def handle_preflight():
         if request.method == "OPTIONS":
             response = app.make_response("")
             origin = request.headers.get('Origin')
-            if origin in app.config.get('CORS_ORIGINS', []):
+            allowed_origins = app.config.get('CORS_ORIGINS', [])
+            if origin and origin in allowed_origins:
                 response.headers['Access-Control-Allow-Origin'] = origin
                 response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
                 response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept'
-                response.headers['Access-Control-Allow-Credentials'] = 'true'
                 response.headers['Access-Control-Max-Age'] = '3600'
             return response
 
@@ -154,7 +164,8 @@ def create_app():
         return {
             "message": "Lenny Media Photography API",
             "version": "1.0.0",
-            "status": "running"
+            "status": "running",
+            "auth": "token-based"
         }
 
     # ============================================
@@ -167,7 +178,6 @@ def create_app():
         
         if origin and origin in allowed_origins:
             response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
         
         return response
 
